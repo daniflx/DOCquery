@@ -61,11 +61,22 @@ def ask_question(question: str):
         temperature=0 # Deixa a resposta mais precisa e menos "criativa"
     )
     # Criamos o "Template" da conversa (O que a IA deve fazer)
-    template = """Responda a pergunta baseando-se apenas no contexto fornecido abaixo:
-    {context}
-    
-    Pergunta: {question}
-    """
+    template = """Você é um especialista em análise de documentos PDF.
+
+        CONTEXTO:
+            {context}
+
+        INSTRUÇÕES:
+        1. Analise o contexto acima e responda à pergunta do usuário.
+        2. Seja extremamente atento a links (URLs), nomes de redes sociais (LinkedIn) e portfólios (Notion, GitHub , Sites).
+        4. Seja atento a datas, cargos, empresas e habilidades técnicas.
+        5. Seja atento a Números, Valores em dinheiro, porcentagens e métricas de desempenho.
+        6. Se encontrar algo que pareça um link, extraia-o integralmente.
+        7. Se a informação não estiver no contexto, diga claramente: "Não encontrei essa informação específica nos documentos."
+
+        PERGUNTA: {question}
+
+        RESPOSTA:"""
     prompt = ChatPromptTemplate.from_template(template)
 
     # A "Corrente" Moderna (Chain) - Isso substitui o load_qa_chain
