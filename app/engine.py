@@ -1,5 +1,8 @@
 import os
 from dotenv import load_dotenv
+from typing import Optional
+from pydantic import BaseModel, Field
+from enum import Enum
 from langchain_community.document_loaders import PyPDFLoader # 1. O "Leitor" de PDF
 from langchain_text_splitters import RecursiveCharacterTextSplitter # 2. O "Fatiador" de texto
 from langchain_community.embeddings import HuggingFaceEmbeddings # Gerador de números
@@ -19,6 +22,45 @@ MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash-lite")
 
 embeddings_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
+
+# 1. Definimos as categorias possíveis (Enum) - Isso evita que a IA invente tipos
+class DocumentType(str, Enum):
+    CURRICULO = "curriculo"
+    NOTA_FISCAL = "nota_fiscal"
+    OUTRO = "outro"
+
+# 2. Criamos o Schema (Molde) que a IA deve preencher
+class FichaTecnica(BaseModel):
+    tipo: DocumentType = Field(description="O tipo de documento identificado")
+    entidade_principal: Optional[str] = Field(None, description="Nome da pessoa ou da empresa")
+    data_documento: Optional[str] = Field(None, description="Data de emissão ou nascimento se houver")
+    valor_ou_objetivo: Optional[str] = Field(None, description="Valor total (nota) ou Objetivo profissional (currículo)")
+    analise_confianca: float = Field(description="Nota de 0 a 1 sobre o quão confiável é essa extração")
+    resumo_critico: Optional[str] = Field(None, description="Um resumo curto destacando os pontos mais importantes do documento")
+
+# 3. Função de Extração
+def extrair_dados_idp(texto_completo: str):
+    # Usamos temperatura 0 para máxima precisão técnica
+    llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0)
+    
+    # O método 'with_structured_output' força o Gemini a retornar um objeto Pydantic
+    extrator = llm.with_structured_output(FichaTecnica)
+    
+    prompt = f"""
+    Sua tarefa é ler o texto de um documento e extrair uma ficha técnica estruturada.
+    Se o documento não for um currículo ou nota fiscal, classifique como 'outro'.
+    
+    TEXTO:
+    {texto_completo[:5000]} # Limitamos para segurança de tokens
+    """
+    
+    try:
+        resultado = extrator.invoke(prompt)
+        return resultado
+    except Exception as e:
+        print(f"Erro na extração estruturada: {e}")
+        return None
+    
 def process_pdf(file_path: str):
     # PASSO A: Carregar o PDF
     loader = PyPDFLoader(file_path) # Função da Biblioteca
