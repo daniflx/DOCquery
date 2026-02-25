@@ -46,7 +46,7 @@ with st.sidebar:
 
                     # 2. Extração Inteligente (IDP) - Só gasta tokens se o arquivo for novo
                     if not ja_existe(nome_arq):
-                        st.write(f"🔍 Extraindo dados inéditos: {nome_arq}")
+                        st.write(f"🔍 Extraindo dados: {nome_arq}")
                         
                         reader = PdfReader(path)
                         # Otimização: Pegamos apenas as primeiras 4 páginas para a ficha técnica

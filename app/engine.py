@@ -66,6 +66,11 @@ def process_pdf(file_path: str):
     loader = PyPDFLoader(file_path) # Função da Biblioteca
     pages = loader.load() # Função da Biblioteca (extrai o texto de todas as páginas)
 
+    # Limpar o metadado para exibir apenas o nome do arquivo e retirar o caminho completo, para evitar problemas de tokenização
+    nome_arquivo = os.path.basename(file_path)
+    for page in pages:
+        page.metadata["source"] = nome_arquivo  # Padroniza a etiqueta da fonte
+
     # PASSO B: Configurar o Fatiador (Text Splitter)
     # Criamos uma "variável de configuração" do fatiador
     text_splitter = RecursiveCharacterTextSplitter(
@@ -97,15 +102,20 @@ def ask_question(question: str, chat_history: list = None):
         chat_history = []
 
     vector_db = FAISS.load_local("faiss_index", embeddings_model, allow_dangerous_deserialization=True)
-    retriever = vector_db.as_retriever()
+    retriever = vector_db.as_retriever(search_kwargs={"k": 5})
 
     llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0)
 
     # NOVO PROMPT: Agora ele entende o que é Histórico e o que é Contexto
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "Você é um especialista em análise de documentos. Use o contexto para responder."),
+        ("system", """Você é um especialista em análise de documentos sênior. 
+        Use estritamente o contexto fornecido para responder.
+        REGRAS:
+        1. Sempre identifique de qual arquivo (Source) veio a informação.
+        2. Se a informação não estiver no contexto, diga que não sabe.
+        3. Seja conciso e profissional."""),
         MessagesPlaceholder(variable_name="chat_history"), # O "buraco" para o histórico
-        ("human", "CONTEXTO:\n{context}\n\nPERGUNTA: {question}")
+        ("human", "Aqui está o contexto extraído dos documentos:\n{context}\n\nPERGUNTA: {question}")
     ])
 
     # A CHAIN: Agora ela mapeia o chat_history que vem lá do Streamlit
