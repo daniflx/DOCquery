@@ -12,6 +12,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.chat_message_histories import ChatMessageHistory
+from app.logger_config import log # Importe o logger
 
 load_dotenv()
 # Isso garante que o Google encontre sua chave
@@ -62,39 +63,59 @@ def extrair_dados_idp(texto_completo: str):
         return None
     
 def process_pdf(file_path: str):
-    # PASSO A: Carregar o PDF
-    loader = PyPDFLoader(file_path) # Função da Biblioteca
-    pages = loader.load() # Função da Biblioteca (extrai o texto de todas as páginas)
-
     # Limpar o metadado para exibir apenas o nome do arquivo e retirar o caminho completo, para evitar problemas de tokenização
     nome_arquivo = os.path.basename(file_path)
-    for page in pages:
-        page.metadata["source"] = nome_arquivo  # Padroniza a etiqueta da fonte
 
-    # PASSO B: Configurar o Fatiador (Text Splitter)
-    # Criamos uma "variável de configuração" do fatiador
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,   # Tamanho de cada "fatia" (1000 caracteres)
-        chunk_overlap=100, # "Sobra" de texto para não cortar uma frase no meio
-        length_function=len
-    )
+    try:
+        # 1. Log de Início (INFO)
+        log.info(f"Iniciando processamento do arquivo: {nome_arquivo}")
 
-    # PASSO C: Cortar o texto em pedaços (Chunks)
-    chunks = text_splitter.split_documents(pages)
-
-# LÓGICA DE ACÚMULO:
-    if os.path.exists("faiss_index"):
-        # Se o banco já existe, carrega ele e adiciona os novos chunks
-        vector_db = FAISS.load_local("faiss_index", embeddings_model, allow_dangerous_deserialization=True)
-        vector_db.add_documents(chunks)
-    else:
-        # Se não existe, cria o primeiro
-        vector_db = FAISS.from_documents(chunks, embeddings_model)
+        # PASSO A: Carregar o PDF
+        loader = PyPDFLoader(file_path) #Biblioteca especializada em ler PDFs complexos (com imagens, tabelas, etc)
+        pages = loader.load() #Função que lê o PDF e retorna uma lista de "Documentos".
         
-    # Salvar localmente
-    vector_db.save_local("faiss_index")
-   
-    return chunks
+        # 2. Log de progresso (DEBUG - bom para saber o tamanho do arquivo)
+        log.debug(f"Arquivo carregado. Total de páginas: {len(pages)}")
+        
+        for page in pages:
+            page.metadata["source"] = nome_arquivo  # Padroniza a etiqueta da fonte
+
+        # PASSO B: Configurar o Fatiador (Text Splitter)
+        # Criamos uma "variável de configuração" do fatiador
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,   # Tamanho de cada "fatia" (1000 caracteres)
+            chunk_overlap=100, # "Sobra" de texto para não cortar uma frase no meio
+            length_function=len
+        )
+
+        # PASSO C: Cortar o texto em pedaços (Chunks)
+        chunks = text_splitter.split_documents(pages)
+
+        # 3. Log de fatiamento (DEBUG)
+        log.debug(f"Documento fatiado em {len(chunks)} chunks.")
+
+        # LÓGICA DE ACÚMULO:
+        if os.path.exists("faiss_index"):
+            # Se o banco já existe, carrega ele e adiciona os novos chunks
+            vector_db = FAISS.load_local("faiss_index", embeddings_model, allow_dangerous_deserialization=True)
+            vector_db.add_documents(chunks)
+        else:
+            # Se não existe, cria o primeiro
+            vector_db = FAISS.from_documents(chunks, embeddings_model)
+            
+        # Salvar localmente
+        vector_db.save_local("faiss_index")
+
+        # 4. Log de Sucesso (INFO)
+        log.info(f"Sucesso: {nome_arquivo} indexado corretamente.")
+
+        return chunks
+
+    except Exception as e:
+        # 5. O SEGREDO DO ENGENHEIRO SÊNIOR: 
+        # O exc_info=True grava o erro completo (Stack Trace) no seu arquivo .log
+        log.error(f"Erro ao processar {nome_arquivo}: {str(e)}", exc_info=True)
+        return None
 
 def ask_question(question: str, chat_history: list = None):
     # Se não passarem histórico, iniciamos uma lista vazia

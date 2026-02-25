@@ -1,6 +1,7 @@
 import sqlite3
 import json
 from datetime import datetime
+from app.logger_config import log # Importe o logger
 
 # Nome do arquivo de banco de dados
 DB_NAME = "documentos.db"
@@ -55,9 +56,19 @@ def delete_all():
     conn.close()
 
 def ja_existe(nome_arquivo):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM documentos WHERE nome_arquivo = ?", (nome_arquivo,))
-    resultado = cursor.fetchone()
-    conn.close()
-    return resultado is not None
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM documentos WHERE nome_arquivo = ?", (nome_arquivo,))
+        resultado = cursor.fetchone()
+        conn.close()
+        
+        if resultado:
+            log.info(f"Cache Hit: O arquivo {nome_arquivo} já existe no banco.")
+        else:
+            log.debug(f"Cache Miss: O arquivo {nome_arquivo} é novo.")
+            
+        return resultado is not None
+    except Exception as e:
+        log.error(f"Erro ao consultar a existência do arquivo no banco de dados: {str(e)}")
+        return False
