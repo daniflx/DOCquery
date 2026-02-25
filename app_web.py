@@ -2,6 +2,9 @@ import streamlit as st
 from app.engine import process_pdf, ask_question, extrair_dados_idp
 import os
 from PyPDF2 import PdfReader
+from app.database import delete_all, init_db, salvar_documento, listar_documentos, ja_existe
+import pandas as pd
+import json
 
 # Configuração da Página
 st.set_page_config(page_title="DocQuery AI", page_icon="📄", layout="centered")
@@ -9,89 +12,144 @@ st.set_page_config(page_title="DocQuery AI", page_icon="📄", layout="centered"
 st.title("📄 DocQuery AI")
 st.markdown("### Analise seus documentos com Inteligência Artificial")
 
-# Sidebar para Upload
+# Inicializa o banco de dados
+init_db()
+
+# Inicialização de estados da sessão
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# Sidebar para Upload e Configurações
 with st.sidebar:
     st.header("Configurações")
     uploaded_files = st.file_uploader("Escolha os PDFs", type="pdf", accept_multiple_files=True)
     
     if st.button("Processar Documentos"):
         if uploaded_files:
-            with st.spinner("Lendo e indexando arquivos..."):
-                # LIMPA O HISTÓRICO APENAS UMA VEZ NO INÍCIO
+            with st.spinner("Analisando documentos e economizando tokens..."):
+                # Limpa o histórico do chat para novos processamentos
                 st.session_state.chat_history = [] 
                 st.session_state.messages = []
                 
-                texto_completo = "" # Variável para acumular o texto de todos os arquivos
-
                 for uploaded_file in uploaded_files:
-                    path = os.path.join("uploads", uploaded_file.name)
+                    nome_arq = uploaded_file.name
+                    path = os.path.join("uploads", nome_arq)
+                    
+                    # Salva o arquivo fisicamente
                     with open(path, "wb") as f:
                         f.write(uploaded_file.read())
                     
-                    # 1. Processa para o RAG (Vetores)
+                    # 1. Processamento para o RAG (Chat/FAISS) - Sempre ocorre
                     process_pdf(path)
 
-                    # 2. Extrai o texto bruto para a Ficha Técnica (IDP)
-                    reader = PdfReader(path)
-                    for page in reader.pages:
-                        texto_completo += page.extract_text() + "\n"
+                    # 2. Extração Inteligente (IDP) - Só gasta tokens se o arquivo for novo
+                    if not ja_existe(nome_arq):
+                        st.write(f"🔍 Extraindo dados inéditos: {nome_arq}")
+                        
+                        reader = PdfReader(path)
+                        # Otimização: Pegamos apenas as primeiras 4 páginas para a ficha técnica
+                        texto_ia = ""
+                        for page in reader.pages[:4]:
+                            texto_ia += page.extract_text() + "\n"
+                        
+                        ficha = extrair_dados_idp(texto_ia)
+                        
+                        if ficha:
+                            # Salva no SQLite para persistência e economia futura
+                            salvar_documento(nome_arq, ficha)
+                    else:
+                        st.write(f"✅ {nome_arq} já possui ficha técnica. Pulando extração...")
                 
-                # Guardamos o texto na "gaveta" da sessão
-                st.session_state.texto_bruto = texto_completo
-                st.success("Documentos prontos!")
+                st.success("Processamento concluído!")
+                st.rerun() 
         else:
             st.warning("Selecione ao menos um arquivo.")
 
-# Inicialização de estados
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# --- HISTÓRICO E EXPORTAÇÃO ---
+st.header("📚 Gerenciador de Documentos")
+historico = listar_documentos()
 
-# --- ÁREA DA FICHA TÉCNICA ---
-# --- ÁREA DA FICHA TÉCNICA (MELHORADA) ---
-if st.button("🔍 Gerar Ficha Técnica do Documento"):
-    if "texto_bruto" in st.session_state and st.session_state.texto_bruto:
-        with st.spinner("Analisando estrutura do documento..."):
-            ficha = extrair_dados_idp(st.session_state.texto_bruto)
-            
-            if ficha:
-                st.success("Extração Concluída com Sucesso!")
+if historico:
+    # 1. Organizamos os dados expandindo o JSON para colunas reais
+    lista_para_df = []
+    for nome, dados_json, data in historico:
+        info = json.loads(dados_json)
+        # Criamos um dicionário plano (flat) para o Pandas entender
+        linha = {
+            "Arquivo": nome,
+            "Tipo": info.get("tipo", "N/A"),
+            "Entidade Principal": info.get("entidade_principal", "N/A"),
+            "Valor/Objetivo": info.get("valor_ou_objetivo", "N/A"),
+            "Confiança IA": f"{info.get('analise_confianca', 0)*100:.1f}%",
+            "Resumo Executivo": info.get("resumo_critico", "N/A"),
+            "Processado em": data
+        }
+        lista_para_df.append(linha)
+
+    df_apresentavel = pd.DataFrame(lista_para_df)
+
+    # 2. Exibimos a tabela na tela (versão resumida para não poluir)
+    st.dataframe(df_apresentavel[["Arquivo", "Tipo", "Entidade Principal", "Processado em"]], 
+                 use_container_width=True, hide_index=True)
+
+    # 3. Botão de Download Organizado
+    # Usamos sep=';' para que o Excel brasileiro abra direto sem desconfigurar
+    csv = df_apresentavel.to_csv(index=False, sep=';', encoding='utf-8-sig').encode('utf-8-sig')
+    
+    st.download_button(
+        label="📥 Baixar Base de Dados Completa (CSV/Excel)",
+        data=csv,
+        file_name='extracao_documentos_ia.csv',
+        mime='text/csv',
+    )
+    
+    # VISUALIZAÇÃO DETALHADA: Permite clicar/selecionar cada PDF individualmente
+    st.markdown("### 🔍 Detalhes da Ficha Técnica")
+    lista_nomes = [row[0] for row in historico]
+    selecionado = st.selectbox("Selecione um documento para visualizar os dados extraídos:", ["-- Selecione um arquivo --"] + lista_nomes)
+
+    if selecionado != "-- Selecione um arquivo --":
+        # Localiza os dados do arquivo selecionado no histórico
+        registro = next(h for h in historico if h[0] == selecionado)
+        ficha_data = json.loads(registro[1])
+
+        tab_visual, tab_json = st.tabs(["📊 Visão Estruturada", "💻 JSON Bruto"])
+        
+        with tab_visual:
+            with st.container(border=True):
+                st.markdown(f"### {ficha_data.get('tipo', 'DOCUMENTO').upper()}")
                 
-                # Criamos Abas para organizar a visualização
-                tab_visual, tab_json = st.tabs(["📊 Visão Estruturada", "💻 JSON Bruto"])
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric(label="Entidade Principal", value=ficha_data.get("entidade_principal", "N/A"))
+                    st.write(f"📅 **Data do Doc:** {ficha_data.get('data_documento', 'Não identificada')}")
                 
-                with tab_visual:
-                    # Usamos um container com borda para dar destaque
-                    with st.container(border=True):
-                        st.markdown(f"### {ficha.tipo.value.upper()}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric(label="Entidade Principal", value=ficha.entidade_principal)
-                            st.write(f"📅 **Data:** {ficha.data_documento if ficha.data_documento else 'Não identificada'}")
-                        
-                        with col2:
-                            # Barra de progresso para a confiança
-                            st.write(f"🎯 **Confiança da IA:** {ficha.analise_confianca * 100:.0f}%")
-                            st.progress(ficha.analise_confianca)
-                            st.write(f"💰 **Valor/Objetivo:** {ficha.valor_ou_objetivo}")
+                with col2:
+                    confianca = ficha_data.get("analise_confianca", 0.0)
+                    st.write(f"🎯 **Confiança da IA:** {confianca * 100:.0f}%")
+                    st.progress(confianca)
+                    st.write(f"💰 **Valor/Objetivo:** {ficha_data.get('valor_ou_objetivo', 'N/A')}")
 
-                        st.divider()
-                        # resumo do Pydantic no engine.py:
-                        if hasattr(ficha, 'resumo_critico'):
-                            st.markdown(f"**Análise Executiva:**\n\n_{ficha.resumo_critico}_")
+                st.divider()
+                if "resumo_critico" in ficha_data:
+                    st.markdown(f"**Análise Executiva:**\n\n_{ficha_data['resumo_critico']}_")
 
-                with tab_json:
-                    st.markdown("#### Saída Pydantic (Backend)")
-                    st.info("Este é o objeto JSON que pode ser enviado diretamente para um Banco de Dados ou API.")
-                    # Mostra o JSON formatado
-                    st.json(ficha.model_dump()) 
+        with tab_json:
+            st.info("Objeto estruturado recuperado do banco de dados SQLite.")
+            st.json(ficha_data)
 
-    else:
-        st.error("Primeiro, faça o upload e processe um documento!")
+    if st.button("🗑️ Limpar Histórico Completo"):
+        delete_all()
+        st.rerun()
+else:
+    st.info("Ainda não existem documentos guardados no histórico.")
+
+st.divider()
 
 # --- ÁREA DO CHAT ---
+st.header("💬 Converse com seus Documentos")
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
