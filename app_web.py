@@ -1,10 +1,13 @@
 import streamlit as st
-from app.engine import process_pdf, ask_question, extrair_dados_idp
+from app.engine import extrair_dados_idp
 import os
 from PyPDF2 import PdfReader
 from app.database import delete_all, init_db, salvar_documento, listar_documentos, ja_existe
 import pandas as pd
 import json
+import requests
+
+API_URL = "http://localhost:8000"
 
 # Configuração da Página
 st.set_page_config(page_title="DocQuery AI", page_icon="📄", layout="centered")
@@ -33,37 +36,80 @@ with st.sidebar:
                 st.session_state.chat_history = [] 
                 st.session_state.messages = []
                 
+                success_count = 0
+                error_count = 0
+                
                 for uploaded_file in uploaded_files:
                     nome_arq = uploaded_file.name
-                    path = os.path.join("uploads", nome_arq)
                     
-                    # Salva o arquivo fisicamente
-                    with open(path, "wb") as f:
-                        f.write(uploaded_file.read())
-                    
-                    # 1. Processamento para o RAG (Chat/FAISS) - Sempre ocorre
-                    process_pdf(path)
+                    try:
+                        # 1. Processamento via API FastAPI para o RAG (Chat/FAISS)
+                        st.write(f"📤 Enviando arquivo: {nome_arq}")
+                        
+                        # Prepara o arquivo para envio
+                        files = {"file": (nome_arq, uploaded_file.getbuffer(), "application/pdf")}
+                        
+                        # Faz a requisição POST para o backend
+                        resposta = requests.post(f"{API_URL}/upload", files=files, timeout=60)
+                        
+                        if resposta.status_code == 200:
+                            dados = resposta.json()
+                            st.write(f"✅ {nome_arq} enviado com sucesso! ({dados.get('chunks_criados', 0)} chunks criados)")
+                            success_count += 1
+                        else:
+                            st.error(f"❌ Erro ao enviar {nome_arq}: {resposta.json().get('detail', 'Erro desconhecido')}")
+                            error_count += 1
+                            continue
 
-                    # 2. Extração Inteligente (IDP) - Só gasta tokens se o arquivo for novo
-                    if not ja_existe(nome_arq):
-                        st.write(f"🔍 Extraindo dados: {nome_arq}")
-                        
-                        reader = PdfReader(path)
-                        # Otimização: Pegamos apenas as primeiras 4 páginas para a ficha técnica
-                        texto_ia = ""
-                        for page in reader.pages[:4]:
-                            texto_ia += page.extract_text() + "\n"
-                        
-                        ficha = extrair_dados_idp(texto_ia)
-                        
-                        if ficha:
-                            # Salva no SQLite para persistência e economia futura
-                            salvar_documento(nome_arq, ficha)
-                    else:
-                        st.write(f"✅ {nome_arq} já possui ficha técnica. Pulando extração...")
+                        # 2. Extração Inteligente (IDP) - Só gasta tokens se o arquivo for novo
+                        if not ja_existe(nome_arq):
+                            st.write(f"🔍 Extraindo dados estruturados: {nome_arq}")
+                            
+                            # Salva o arquivo localmente para leitura
+                            path = os.path.join("uploads", nome_arq)
+                            with open(path, "wb") as f:
+                                uploaded_file.seek(0)  # Volta ao início do buffer
+                                f.write(uploaded_file.getbuffer())
+                            
+                            reader = PdfReader(path)
+                            # Otimização: Pegamos apenas as primeiras 4 páginas para a ficha técnica
+                            texto_ia = ""
+                            for page in reader.pages[:4]:
+                                texto_ia += page.extract_text() + "\n"
+                            
+                            ficha = extrair_dados_idp(texto_ia)
+                            
+                            if ficha:
+                                # Salva no SQLite para persistência e economia futura
+                                salvar_documento(nome_arq, ficha)
+                                st.write(f"📋 Ficha técnica extraída para: {nome_arq}")
+                            else:
+                                st.warning(f"⚠️ Não foi possível extrair ficha técnica de {nome_arq}")
+                        else:
+                            st.write(f"✅ {nome_arq} já possui ficha técnica em cache. Pulando extração...")
+                    
+                    except requests.exceptions.ConnectionError:
+                        st.error(f"❌ Erro de conexão: Não foi possível conectar ao servidor FastAPI em {API_URL}")
+                        st.info("💡 Certifique-se de que o servidor FastAPI está rodando (uvicorn app.main:app --reload)")
+                        error_count += 1
+                    except requests.exceptions.Timeout:
+                        st.error(f"❌ Timeout: O servidor demorou muito para responder para {nome_arq}")
+                        error_count += 1
+                    except Exception as e:
+                        st.error(f"❌ Erro ao processar {nome_arq}: {str(e)}")
+                        error_count += 1
                 
-                st.success("Processamento concluído!")
-                st.rerun() 
+                # Resumo final
+                st.markdown("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.success(f"✅ Sucesso: {success_count} arquivo(s)")
+                with col2:
+                    if error_count > 0:
+                        st.error(f"❌ Erros: {error_count} arquivo(s)")
+                
+                if success_count > 0:
+                    st.rerun() 
         else:
             st.warning("Selecione ao menos um arquivo.")
 
@@ -159,10 +205,33 @@ if prompt := st.chat_input("O que deseja saber sobre o documento?"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
-        response = ask_question(prompt, chat_history=st.session_state.chat_history)
-        st.markdown(response)
-
-    st.session_state.chat_history.append(("human", prompt))
-    st.session_state.chat_history.append(("ai", response))    
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    try:
+        with st.chat_message("assistant"):
+            with st.spinner("🤔 Pensando..."):
+                # Faz requisição POST para o endpoint /ask do FastAPI
+                resposta_api = requests.post(
+                    f"{API_URL}/ask",
+                    params={"question": prompt},
+                    timeout=60
+                )
+                
+                if resposta_api.status_code == 200:
+                    dados = resposta_api.json()
+                    response = dados.get("answer", "Erro ao obter resposta")
+                    st.markdown(response)
+                    
+                    # Adiciona ao histórico
+                    st.session_state.chat_history.append(("human", prompt))
+                    st.session_state.chat_history.append(("ai", response))    
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                else:
+                    erro_msg = resposta_api.json().get("detail", "Erro desconhecido")
+                    st.error(f"❌ Erro ao processar pergunta: {erro_msg}")
+    
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Erro de conexão: Não foi possível conectar ao servidor FastAPI.")
+        st.info("💡 Certifique-se de que o servidor FastAPI está rodando.")
+    except requests.exceptions.Timeout:
+        st.error("❌ Timeout: O servidor demorou muito para responder.")
+    except Exception as e:
+        st.error(f"❌ Erro ao comunicar com a API: {str(e)}")
