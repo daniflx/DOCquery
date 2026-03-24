@@ -61,7 +61,7 @@ Fase 2: Refinamento de Recuperação
 [ ] Multi-Query Retrieval: Geração de variações da pergunta do usuário para capturar trechos de documentos com diferentes termos semânticos.
 
 Fase 3: MLOps e Avaliação
-[ ] Framework RAGAS: Automação de testes para medir a precisão (faithfulness) e relevância das respostas.
+[OK] Framework RAGAS: Automação de testes para medir a precisão (faithfulness) e relevância das respostas.
 
 Como rodar o projeto
 Localmente
