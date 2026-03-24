@@ -139,16 +139,27 @@ def ask_question(question: str, chat_history: list = None):
         ("human", "Aqui está o contexto extraído dos documentos:\n{context}\n\nPERGUNTA: {question}")
     ])
 
-    # A CHAIN: Agora ela mapeia o chat_history que vem lá do Streamlit
-    chain = (
-        {
-            "context": retriever, 
-            "question": RunnablePassthrough(),
-            "chat_history": lambda x: chat_history # Injeta o histórico aqui
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
+        # 1. Fazemos a busca no FAISS *antes* da chain e guardamos o resultado
+    documentos_recuperados = retriever.invoke(question)
+    
+    # 2. Juntamos o texto dos pedaços para mandar para o LLM ler
+    contexto_formatado = "\n\n".join([doc.page_content for doc in documentos_recuperados])
+    
+    # 3. Extraímos os textos puros para uma lista (O RAGAS VAI PRECISAR DISSO!)
+    lista_de_contextos = [doc.page_content for doc in documentos_recuperados]
 
-    return chain.invoke(question)
+    # 4. A Chain fica ainda mais simples, ela só recebe os dados prontos e gera a resposta
+    chain = prompt | llm | StrOutputParser()
+
+    # 5. Invocamos a chain passando os dados que já preparamos
+    resposta_texto = chain.invoke({
+        "context": contexto_formatado,
+        "question": question,
+        "chat_history": chat_history
+    })
+
+    # 6. Em vez de retornar SÓ a string, retornamos um DICIONÁRIO com a resposta E os contextos
+    return {
+        "answer": resposta_texto,
+        "contexts": lista_de_contextos
+    }

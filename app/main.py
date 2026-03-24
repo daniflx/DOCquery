@@ -102,9 +102,9 @@ async def ask_endpoint(question: str):
         
         log.info(f"Pergunta recebida: {question}")
         
-        answer = ask_question(question)
+        resultado_rag = ask_question(question)
         
-        if answer is None:
+        if resultado_rag is None:
             raise HTTPException(status_code=500, detail="Erro ao processar a pergunta")
         
         log.info(f"Resposta gerada com sucesso")
@@ -112,7 +112,8 @@ async def ask_endpoint(question: str):
         return {
             "status": "success",
             "question": question, 
-            "answer": answer
+            "answer": resultado_rag["answer"],
+            "contexts": resultado_rag["contexts"] # <-- NOVA INFORMAÇÃO AQUI!
         }
     
     except HTTPException:
