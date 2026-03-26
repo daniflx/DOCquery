@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException ,BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
 from app.engine import process_pdf, ask_question
@@ -35,12 +35,16 @@ def home():
     }
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None
+    ):
     """
     Faz upload de um arquivo PDF e o processa para embeddings.
     
     Args:
         file: Arquivo PDF enviado pelo cliente
+        background_tasks: Tarefas em segundo plano para processar o arquivo sem bloquear a resposta imediata
         
     Returns:
         Informações sobre o processamento do arquivo
@@ -64,19 +68,17 @@ async def upload_file(file: UploadFile = File(...)):
         absolute_path = os.path.abspath(file_path)
         log.debug(f"Arquivo salvo em: {absolute_path}")
         
-        # 5. Processar o PDF
-        chunks = process_pdf(absolute_path)
+        # 5. Processar o PDF (agora em segundo plano para não bloquear a resposta)
+        if background_tasks:
+            background_tasks.add_task(process_pdf, absolute_path)
         
-        if chunks is None:
-            raise HTTPException(status_code=500, detail="Erro ao processar o PDF")
         
-        log.info(f"Arquivo {clean_name} processado com sucesso. Total de chunks: {len(chunks)}")
+        log.info(f"Arquivo {clean_name} processando em segundo plano") 
         
         return {
-            "status": "success",
-            "filename": clean_name, 
-            "chunks_criados": len(chunks), 
-            "message": "Arquivo processado com sucesso!"
+            "status": "processing",
+            "filename": clean_name,  
+            "message": "Arquivo recebido com sucesso! O processamento da IA está em andamento."
         }
     
     except HTTPException:

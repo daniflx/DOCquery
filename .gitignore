@@ -5,3 +5,4 @@ faiss_index/
 uploads/
 *.pyc
 *.log
+documentos.db
