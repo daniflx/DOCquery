@@ -1,8 +1,10 @@
 .env
 __pycache__/
 .venv/
+venv/
 faiss_index/
 uploads/
 *.pyc
 *.log
-documentos.db
+*.db
+*.sqlite3
